@@ -1,13 +1,15 @@
 import javax.swing.*;
-import javax.swing.table.DefaultTableModel;
 import java.awt.*;
-import java.awt.event.ActionEvent;
 import java.awt.event.ActionListener;
 import java.math.BigDecimal;
 import java.sql.*;
 import java.text.DecimalFormat;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
+import net.sf.jasperreports.engine.*;
+import net.sf.jasperreports.swing.JRViewer;
 
 // Enum para representar os tipos de transação
 enum TipoTransacao {
@@ -85,6 +87,7 @@ class ControleFinanceiro extends JFrame {
 
         painelBotoes.add(criarBotao("Registrar Transação", e -> abrirJanelaTransacao()));
         painelBotoes.add(criarBotao("Gerar Relatório", e -> abrirJanelaRelatorio()));
+        painelBotoes.add(criarBotao("Limpar Dados", e -> limparDadosTransacao()));
         painelBotoes.add(criarBotao("Sair", e -> System.exit(0)));
 
         return painelBotoes;
@@ -155,63 +158,64 @@ class ControleFinanceiro extends JFrame {
 
     // Abre a janela de relatório de transações
     private void abrirJanelaRelatorio() {
-        JFrame janelaRelatorio = new JFrame("Relatório de Transações");
-        janelaRelatorio.setSize(500, 400);
+        try {
+            // Compila o relatório a partirado arquivo .jrxml
+            JasperReport relatorioCompilado = JasperCompileManager.compileReport("Relatorios/Extrato.jrxml");
 
-        try (PreparedStatement statement = conexao.prepareStatement("SELECT descricao, valor, tipo FROM transacoes");
-             ResultSet resultSet = statement.executeQuery()) {
-            DefaultTableModel modeloTabela = new DefaultTableModel();
-            JTable tabelaRelatorio = new JTable(modeloTabela);
-            modeloTabela.setColumnIdentifiers(new Object[]{"Descrição", "Valor (R$)", "Tipo"});
+            // Preenche o relatório com os dados do banco de dados
+            JasperPrint relatorioPreenchido = JasperFillManager.fillReport(relatorioCompilado, null, conexao);
 
-            while (resultSet.next()) {
-                String descricao = resultSet.getString("descricao");
-                BigDecimal valor = resultSet.getBigDecimal("valor");
-                TipoTransacao tipo = TipoTransacao.valueOf(resultSet.getString("tipo"));
-                modeloTabela.addRow(new Object[]{descricao, "R$ " + decimalFormat.format(valor), tipo});
+            // Verifica se há páginas no relatório preenchido
+            if (relatorioPreenchido.getPages().isEmpty()) {
+                JOptionPane.showMessageDialog(this, "O relatório está vazio. Verifique se há dados no banco de dados.", "Aviso", JOptionPane.INFORMATION_MESSAGE);
+                return;
             }
 
-            janelaRelatorio.add(new JScrollPane(tabelaRelatorio));
-        } catch (SQLException ex) {
-            JOptionPane.showMessageDialog(null, ex);
+            // Cria uma janela de diálogo para exibir o relatório
+            JDialog telaRelatorio = new JDialog(this, "Relatório de Transações", true);
+            telaRelatorio.setSize(800, 600);
+
+            // Adiciona o painel do visualizador de relatórios Jasper na janela de diálogo
+            JRViewer painelRelatorio = new JRViewer(relatorioPreenchido);
+            telaRelatorio.getContentPane().add(painelRelatorio);
+
+            // Define a janela de diálogo como visível
+            telaRelatorio.setVisible(true);
+        } catch (JRException ex) {
+            JOptionPane.showMessageDialog(this, "Erro ao gerar o relatório: " + ex.getMessage(), "Erro", JOptionPane.ERROR_MESSAGE);
+            ex.printStackTrace();
         }
 
-        JButton botaoLimpar = criarBotao("Limpar Dados", ev -> {
-            int confirmacao = JOptionPane.showConfirmDialog(janelaRelatorio, "Tem certeza de que deseja limpar todos os dados de transação?", "Confirmação", JOptionPane.YES_NO_OPTION);
-            if (confirmacao == JOptionPane.YES_OPTION) {
-                limparDadosTransacao();
-                JOptionPane.showMessageDialog(janelaRelatorio, "Dados de transação limpos com sucesso.");
-                janelaRelatorio.dispose();
-                abrirJanelaPrincipal();
-            }
-        });
+        // Cria uma lista de parâmetros, se necessário (pode ser null se não houver parâmetros)
+        Map<String, Object> parametros = new HashMap<>();
 
-        JButton botaoVoltar = criarBotao("Voltar", ev -> {
-            janelaRelatorio.dispose();
-            abrirJanelaPrincipal();
-        });
-
-        JPanel painelBotoes = new JPanel(new FlowLayout(FlowLayout.CENTER));
-        painelBotoes.add(botaoLimpar);
-        painelBotoes.add(botaoVoltar);
-        janelaRelatorio.add(painelBotoes, BorderLayout.PAGE_END);
-
-        janelaRelatorio.setLocationRelativeTo(this);
-        janelaRelatorio.setVisible(true);
+        // Cria uma lista de dados para o relatório
+        List<Map<String, ?>> data = new ArrayList<>();
+        for (Transacao transacao : transacoes) {
+            Map<String, Object> map = new HashMap<>();
+            map.put("descricao", transacao.getDescricao());
+            map.put("valor", transacao.getValor());
+            map.put("tipo", transacao.getTipo().name());
+            data.add(map);
+        }
     }
 
     // Limpa todos os dados de transações do banco de dados
     private void limparDadosTransacao() {
-        try (Statement statement = conexao.createStatement()) {
-            statement.executeUpdate("DELETE FROM transacoes");
-        } catch (SQLException ex) {
-            JOptionPane.showMessageDialog(null, ex);
+        int confirmacao = JOptionPane.showConfirmDialog(this, "Tem certeza de que deseja limpar todos os dados de transação?", "Confirmação", JOptionPane.YES_NO_OPTION);
+        if (confirmacao == JOptionPane.YES_OPTION) {
+            try (Statement statement = conexao.createStatement()) {
+                statement.executeUpdate("DELETE FROM transacoes");
+            } catch (SQLException ex) {
+                JOptionPane.showMessageDialog(this, ex.getMessage(), "Erro", JOptionPane.ERROR_MESSAGE);
+            }
+            transacoes.clear();
+            saldo = BigDecimal.ZERO;
+            entradas = BigDecimal.ZERO;
+            saidas = BigDecimal.ZERO;
+            atualizarLabelSaldo();
+            JOptionPane.showMessageDialog(this, "Dados de transação limpos com sucesso.");
         }
-        transacoes.clear();
-        saldo = BigDecimal.ZERO;
-        entradas = BigDecimal.ZERO;
-        saidas = BigDecimal.ZERO;
-        atualizarLabelSaldo();
     }
 
     // Reabre a janela principal
@@ -234,7 +238,7 @@ class ControleFinanceiro extends JFrame {
             statement.setString(3, transacao.getTipo().name());
             statement.executeUpdate();
         } catch (SQLException ex) {
-            JOptionPane.showMessageDialog(null, ex);
+            JOptionPane.showMessageDialog(this, ex.getMessage(), "Erro", JOptionPane.ERROR_MESSAGE);
         }
     }
 
@@ -260,7 +264,7 @@ class ControleFinanceiro extends JFrame {
             saidas = totalSaidas;
             atualizarLabelSaldo();
         } catch (SQLException ex) {
-            JOptionPane.showMessageDialog(null, ex);
+            JOptionPane.showMessageDialog(this, ex.getMessage(), "Erro", JOptionPane.ERROR_MESSAGE);
         }
     }
 
@@ -268,9 +272,9 @@ class ControleFinanceiro extends JFrame {
     private void conectarBanco() {
         try {
             Class.forName("com.mysql.cj.jdbc.Driver");
-            conexao = DriverManager.getConnection("jdbc:mysql://www.welisondavi.com.br/welisond_nicolla","welisond_nicolla", "@Nico3044");
+            conexao = DriverManager.getConnection("jdbc:mysql://www.welisondavi.com.br/welisond_nicolla", "welisond_nicolla", "@Nico3044");
         } catch (Exception ex) {
-            JOptionPane.showMessageDialog(null, ex);
+            JOptionPane.showMessageDialog(this, ex.getMessage(), "Erro", JOptionPane.ERROR_MESSAGE);
         }
     }
 
